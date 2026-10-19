@@ -146,7 +146,7 @@ export class SignScheduler extends DurableObject {
     const accounts = configuredAccounts(this.env);
     for (const account of accounts) {
       const key = await accountKey(account.email);
-      if (canAttempt(state.results?.[key], state.riskStopped)) return true;
+      if (canAttempt(state.results?.[key], state.riskStopped, !!account.cookie)) return true;
     }
     return false;
   }
@@ -165,7 +165,7 @@ export class SignScheduler extends DurableObject {
       for (const account of accounts) {
         const key = await accountKey(account.email);
         const prior = state.results[key] || { ok: false, attempts: 0 };
-        if (!canAttempt(prior, state.riskStopped)) continue;
+        if (!canAttempt(prior, state.riskStopped, !!account.cookie)) continue;
         // Reserve the daily sign attempt before making any external request.
         // This ensures an interrupted run cannot get an extra attempt.
         state.results[key] = {
