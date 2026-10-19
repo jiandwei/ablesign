@@ -27,7 +27,7 @@ test('rotated Cookie clears expiry but preserves the daily attempt and password 
   const next = activeCookieRecord(rotated,record);
   assert.equal(next.cookieExpired,false);
   assert.equal(next.cookieStatus,'unchecked');
-  assert.equal(next.checkedAt,undefined);
+  assert.equal(next.cookieCheckedAt,null);
   assert.equal(next.attempts,2);
   assert.equal(next.passwordLoginUsed,true);
   assert.equal(next.cookieFingerprint,rotated);
