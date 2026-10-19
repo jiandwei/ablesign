@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { DASHBOARD_HTML } from './dashboard.js';
 import { beijingDay, atBeijing, inSignWindow, randomTarget, randomInt, parseAccounts, accountKey, nextDay } from './utils.js';
 import { signAccount } from './ablesci.js';
 import { notify } from './notify.js';
@@ -21,6 +22,22 @@ function secureEqual(a, b) {
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
+    if (request.method === 'GET' && path === '/') {
+      const bytes = new Uint8Array(18);
+      crypto.getRandomValues(bytes);
+      const nonce = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+      const html = DASHBOARD_HTML.replace('<script>', '<script nonce="' + nonce + '">');
+      return new Response(html, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, max-age=0',
+          'Referrer-Policy': 'no-referrer',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
+          'Content-Security-Policy': "default-src 'none'; script-src 'nonce-" + nonce + "'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        }
+      });
+    }
     if (request.method === 'GET' && path === '/health') {
       return reply({ ok: true, service: 'ablesign' });
     }
