@@ -1,7 +1,10 @@
 // Conservative limits: one random initial attempt plus at most two retries per account per Beijing day.
 export const MAX_ATTEMPTS = 3;
-export function canAttempt(record, riskStopped = false) {
-  return !riskStopped && !record?.ok && !record?.blocked && (record?.attempts || 0) < MAX_ATTEMPTS;
+export function canAttempt(record, riskStopped = false, hasCookie = false) {
+  const cookieUsable = hasCookie && !record?.cookieExpired;
+  const passwordAvailable = !record?.passwordLoginUsed;
+  return !riskStopped && !record?.ok && !record?.blocked &&
+    (record?.attempts || 0) < MAX_ATTEMPTS && (cookieUsable || passwordAvailable);
 }
 export function isRiskHttp(status) {
   return status === 403 || status === 429;
