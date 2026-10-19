@@ -74,6 +74,8 @@ footer a{color:#527bad}
 <dt>下次计划唤醒</dt><dd id="next">—</dd>
 <dt>最近执行时间</dt><dd id="last">—</dd>
 <dt>当前任务状态</dt><dd id="busy">—</dd>
+<dt>风控停止</dt><dd id="risk">—</dd>
+<dt>每日尝试上限</dt><dd id="limit">—</dd>
 </dl>
 <div class="toolbar">
 <button id="refresh" type="button" class="secondary">刷新状态</button>
@@ -135,6 +137,8 @@ function render(state){
  display('next',beijing(state.nextWake));
  display('last',beijing(state.lastRun));
  display('busy',state.busy?'执行中':'等待调度');
+ display('risk',state.riskStopped?'已停止今日全部签到':'未触发');
+ display('limit',state.maxAttemptsPerAccount ? '每账号 '+state.maxAttemptsPerAccount+' 次（首次 + 重试）' : '—');
  byId('dashboard').hidden=false;
 }
 async function load(){
@@ -190,7 +194,7 @@ byId('run').addEventListener('click',async function(){
  try{
   var result=await api('/run','POST');
   await load();
-  message('执行完成：成功 '+result.completed+' 个，待补签 '+result.pending+' 个。',result.ok?'success':'error');
+  message('执行完成：成功 '+result.completed+' 个，待补签 '+result.pending+' 个。'+(result.riskStopped?' 检测到风控，今日已停止。':''),result.ok?'success':'error');
  }catch(err){message(err.message,'error');}
  finally{showBusy(false);}
 });
