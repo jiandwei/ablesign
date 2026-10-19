@@ -3,3 +3,6 @@ ADMIN_TOKEN="REPLACE_WITH_LONG_RANDOM_ADMIN_TOKEN_AT_LEAST_32_CHARACTERS"
 # PUSH_PLUS_TOKEN=""
 # SCKEY=""
 # XZKEY=""
+
+# Optional one account: ABLESCI_COOKIE="sid=example; other=value"
+# Optional multiple accounts: ABLESCI_COOKIES='{"user@example.com":"sid=example"}'
