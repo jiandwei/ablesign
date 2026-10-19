@@ -1,8 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import { DASHBOARD_HTML } from './dashboard.js';
-import { beijingDay, atBeijing, inSignWindow, randomTarget, randomInt, parseAccounts, accountKey, nextDay } from './utils.js';
+import { beijingDay, atBeijing, inSignWindow, randomTarget, randomInt, accountKey } from './utils.js';
 import { signAccount } from './ablesci.js';
 import { configuredAccounts } from './credentials.js';
+import { cookieFingerprint, cookieObservation, maskAccount, activeCookieRecord } from './cookie-status.js';
 import { notify } from './notify.js';
 import { canAttempt, MAX_ATTEMPTS } from './policy.js';
 
@@ -86,6 +87,19 @@ export class SignScheduler extends DurableObject {
     if (path === '/status') {
       const state = await this.current();
       const keys = Object.values(state?.results || {});
+      // Passive status only: do not contact AbleSci when /status is viewed.
+      const cookieAccounts = [];
+      const accounts = configuredAccounts(this.env);
+      for (let i = 0; i < accounts.length; i++) {
+        const account = accounts[i];
+        const key = await accountKey(account.email);
+        const fingerprint = await cookieFingerprint(account.cookie);
+        const record = state?.date === beijingDay() ? state?.results?.[key] : null;
+        cookieAccounts.push({
+          account: '账号 ' + (i + 1) + ' (' + maskAccount(account.email) + ')',
+          ...cookieObservation(fingerprint, record)
+        });
+      }
       return reply({
         date: state?.date || null,
         targetBeijing: state?.target ? new Date(state.target + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19) + ' (UTC+8)' : null,
@@ -95,6 +109,7 @@ export class SignScheduler extends DurableObject {
         riskStopped: !!state?.riskStopped,
         maxAttemptsPerAccount: MAX_ATTEMPTS,
         passwordLogins: keys.filter(x => x.passwordLoginUsed).length,
+        cookieAccounts,
         nextWake: await this.ctx.storage.getAlarm(),
         lastRun: state?.lastRun || null,
         lastError: state?.lastError || null,
@@ -146,7 +161,9 @@ export class SignScheduler extends DurableObject {
     const accounts = configuredAccounts(this.env);
     for (const account of accounts) {
       const key = await accountKey(account.email);
-      if (canAttempt(state.results?.[key], state.riskStopped, !!account.cookie)) return true;
+      const fingerprint = await cookieFingerprint(account.cookie);
+      const record = activeCookieRecord(fingerprint, state.results?.[key]);
+      if (canAttempt(record, state.riskStopped, !!account.cookie)) return true;
     }
     return false;
   }
@@ -158,18 +175,20 @@ export class SignScheduler extends DurableObject {
       if (state.date !== beijingDay(now) || !inSignWindow(now)) {
         return { ok: false, detail: 'outside_sign_window' };
       }
-      const accounts = parseAccounts(this.env.ABLESCI_ACCOUNTS);
+      const accounts = configuredAccounts(this.env);
       if (!accounts.length) return { ok: false, detail: 'no_accounts' };
       if (state.riskStopped) return { ok: false, detail: 'risk_stopped_for_today' };
       let attempted = 0;
       for (const account of accounts) {
         const key = await accountKey(account.email);
-        const prior = state.results[key] || { ok: false, attempts: 0 };
+        const fingerprint = await cookieFingerprint(account.cookie);
+        const prior = activeCookieRecord(fingerprint, state.results[key]);
         if (!canAttempt(prior, state.riskStopped, !!account.cookie)) continue;
         // Reserve the daily sign attempt before making any external request.
         // This ensures an interrupted run cannot get an extra attempt.
         state.results[key] = {
           ...prior,
+          cookieFingerprint: fingerprint,
           attempts: (prior.attempts || 0) + 1,
           detail: 'attempt_started',
           checked: Date.now()
@@ -192,6 +211,8 @@ export class SignScheduler extends DurableObject {
           detail: result.detail,
           blocked: !!result.blocked,
           cookieExpired: !!prior.cookieExpired || !!result.cookieExpired,
+          cookieStatus: result.cookieStatus || state.results[key].cookieStatus || 'unchecked',
+          cookieCheckedAt: result.cookieCheckedAt || state.results[key].cookieCheckedAt || null,
           mode: result.mode || null,
           checked: Date.now()
         };
