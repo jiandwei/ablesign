@@ -76,6 +76,7 @@ footer a{color:#527bad}
 <dt>当前任务状态</dt><dd id="busy">—</dd>
 <dt>风控停止</dt><dd id="risk">—</dd>
 <dt>每日尝试上限</dt><dd id="limit">—</dd>
+<dt>已使用密码登录配额的账号数</dt><dd id="pwlogins">—</dd>
 </dl>
 <div class="toolbar">
 <button id="refresh" type="button" class="secondary">刷新状态</button>
@@ -138,6 +139,7 @@ function render(state){
  display('last',beijing(state.lastRun));
  display('busy',state.busy?'执行中':'等待调度');
  display('risk',state.riskStopped?'已停止今日全部签到':'未触发');
+ display('pwlogins',state.passwordLogins);
  display('limit',state.maxAttemptsPerAccount ? '每账号 '+state.maxAttemptsPerAccount+' 次（首次 + 重试）' : '—');
  byId('dashboard').hidden=false;
 }
