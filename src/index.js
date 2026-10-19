@@ -3,6 +3,7 @@ import { DASHBOARD_HTML } from './dashboard.js';
 import { beijingDay, atBeijing, inSignWindow, randomTarget, randomInt, parseAccounts, accountKey, nextDay } from './utils.js';
 import { signAccount } from './ablesci.js';
 import { notify } from './notify.js';
+import { canAttempt, MAX_ATTEMPTS } from './policy.js';
 
 function reply(value, status = 200) {
   return Response.json(value, {
@@ -89,6 +90,9 @@ export class SignScheduler extends DurableObject {
         targetBeijing: state?.target ? new Date(state.target + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19) + ' (UTC+8)' : null,
         completed: keys.filter(x => x.ok).length,
         attempted: keys.filter(x => x.attempts > 0).length,
+        blocked: keys.filter(x => x.blocked).length,
+        riskStopped: !!state?.riskStopped,
+        maxAttemptsPerAccount: MAX_ATTEMPTS,
         nextWake: await this.ctx.storage.getAlarm(),
         lastRun: state?.lastRun || null,
         lastError: state?.lastError || null,
@@ -117,7 +121,7 @@ export class SignScheduler extends DurableObject {
     const day = beijingDay(now);
     let state = await this.current();
     if (state?.date !== day) {
-      state = { date: day, target: randomTarget(day), results: {}, lastRun: null, lastError: null };
+      state = { date: day, target: randomTarget(day), results: {}, riskStopped: false, lastRun: null, lastError: null };
       await this.save(state);
     }
     // If no alarm exists, restore it. A target in the past is scheduled immediately
@@ -126,8 +130,8 @@ export class SignScheduler extends DurableObject {
       const fallback = atBeijing(day, 23, 45);
       const earliest = atBeijing(day, 7, 30);
       const latest = atBeijing(day, 21, 30);
-      const allSucceeded = await this.allDone(state);
-      if (!allSucceeded) {
+      const hasPending = await this.hasPending(state);
+      if (hasPending) {
         if (now < earliest) await this.ctx.storage.setAlarm(state.target);
         else if (now < latest) await this.ctx.storage.setAlarm(Math.max(now + 1000, state.target));
         else if (now < fallback) await this.ctx.storage.setAlarm(fallback);
@@ -135,14 +139,14 @@ export class SignScheduler extends DurableObject {
     }
     return state;
   }
-  async allDone(state) {
+  async hasPending(state) {
+    if (state.riskStopped) return false;
     const accounts = parseAccounts(this.env.ABLESCI_ACCOUNTS);
-    if (!accounts.length) return true;
     for (const account of accounts) {
       const key = await accountKey(account.email);
-      if (!state.results?.[key]?.ok) return false;
+      if (canAttempt(state.results?.[key], state.riskStopped)) return true;
     }
-    return true;
+    return false;
   }
   async execute(state, final = false) {
     if (this.busy) return { ok: false, detail: 'already_running' };
@@ -154,30 +158,35 @@ export class SignScheduler extends DurableObject {
       }
       const accounts = parseAccounts(this.env.ABLESCI_ACCOUNTS);
       if (!accounts.length) return { ok: false, detail: 'no_accounts' };
+      if (state.riskStopped) return { ok: false, detail: 'risk_stopped_for_today' };
       let attempted = 0;
       for (const account of accounts) {
         const key = await accountKey(account.email);
         const prior = state.results[key] || { ok: false, attempts: 0 };
-        if (prior.ok) continue;
+        if (!canAttempt(prior, state.riskStopped)) continue;
         const result = await signAccount(account.email, account.password);
         state.results[key] = {
           ok: result.ok,
           detail: result.detail,
           attempts: prior.attempts + 1,
+          blocked: !!result.blocked,
           checked: Date.now()
         };
         attempted++;
+        if (result.blocked) state.riskStopped = true;
         // Persist after each account: a crash cannot erase previous successes.
         await this.save(state);
+        if (state.riskStopped) break; // Stop all accounts for the rest of the day on risk signals.
       }
       state.lastRun = Date.now();
       state.lastError = null;
       await this.save(state);
       const success = Object.values(state.results).filter(x => x.ok).length;
       const failed = accounts.length - success;
-      if (failed === 0) {
+      const retryable = await this.hasPending(state);
+      if (!retryable) {
         await this.ctx.storage.deleteAlarm();
-      } else if (failed > 0 && !final) {
+      } else if (!final) {
         const deadline = atBeijing(state.date, 23, 45);
         const when = Date.now() + (5 * 60 + randomInt(26 * 60)) * 1000;
         if (when < deadline) await this.ctx.storage.setAlarm(when);
@@ -187,10 +196,11 @@ export class SignScheduler extends DurableObject {
         if (attempted > 0) {
           await notify(this.env, '科研通随机签到', '北京时间日期：' + state.date +
             '\n账号总数：' + accounts.length + '\n成功/已签到：' + success +
-            '\n待补签：' + failed + '\n本轮尝试：' + attempted);
+            '\n待补签：' + failed + '\n本轮尝试：' + attempted +
+          (state.riskStopped ? '\n检测到风控，今日已停止全部自动签到。' : ''));
         }
       } catch { console.warn('notification request failed'); }
-      return { ok: failed === 0, date: state.date, attempted, completed: success, pending: failed };
+      return { ok: failed === 0, date: state.date, attempted, completed: success, pending: failed, riskStopped: !!state.riskStopped };
     } finally {
       this.busy = false;
     }
@@ -200,7 +210,7 @@ export class SignScheduler extends DurableObject {
     let state = await this.ensureToday(false);
     const now = Date.now();
     if (now < state.target || !inSignWindow(now)) {
-      if (now < state.target) await this.ctx.storage.setAlarm(state.target);
+      if (now < state.target && await this.hasPending(state)) await this.ctx.storage.setAlarm(state.target);
       return;
     }
     // Do not sign on an expired day / outside the 07:30–23:59 window.
