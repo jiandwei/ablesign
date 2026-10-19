@@ -35,6 +35,13 @@ button:disabled{opacity:.48;cursor:not-allowed}
 .metric .small{color:#617589;font-size:12px}
 .details{display:grid;grid-template-columns:150px 1fr;gap:14px 10px;font-size:14px}
 .details dt{color:#62768a}.details dd{margin:0;overflow-wrap:anywhere}
+.cookie-list{display:grid;gap:9px;margin:12px 0}
+.cookie-entry{border:1px solid #e5edf5;border-radius:9px;padding:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cookie-entry strong{font-size:13px;font-weight:650;min-width:120px}
+.cookie-entry small{color:#62768a;font-size:12px}
+.cookie-tag{font-size:12px;padding:5px 9px;border-radius:20px;background:#eff3f8;color:#48637b}
+.cookie-tag.valid{background:#e4f7e9;color:#17753d}
+.cookie-tag.expired,.cookie-tag.restricted{background:#fff0e9;color:#a14c18}
 .notice{padding:13px;border-radius:9px;background:#eff6ff;color:#1b5387;font-size:14px;min-height:45px;line-height:1.55}
 .notice.success{background:#eaf9ef;color:#126b37}
 .notice.error{background:#fff0ef;color:#a52b24}
@@ -78,6 +85,9 @@ footer a{color:#527bad}
 <dt>每日尝试上限</dt><dd id="limit">—</dd>
 <dt>已使用密码登录配额的账号数</dt><dd id="pwlogins">—</dd>
 </dl>
+<h2 style="font-size:15px;margin:20px 0 8px">Cookie 验证状态</h2>
+<div id="cookies" class="cookie-list" role="list" aria-live="polite"></div>
+<p class="muted">仅显示最近一次实际签到请求的观察结果，不会因为查看状态而向科研通额外发起请求。“上次有效”不保证此刻仍有效；更换 Cookie 后显示“尚未验证”，直到下次使用。</p>
 <div class="toolbar">
 <button id="refresh" type="button" class="secondary">刷新状态</button>
 <button id="init" type="button">生成 / 恢复今日计划</button>
@@ -130,6 +140,38 @@ async function api(path, method){
  }
  return body;
 }
+var cookieLabels = {
+ not_configured:'未配置', unchecked:'尚未验证', valid:'上次验证有效',
+ expired:'已失效', restricted:'访问受限，无法确认', unknown:'无法确认'
+};
+function renderCookies(accounts){
+ var root=byId('cookies');
+ root.replaceChildren();
+ if(!Array.isArray(accounts)||accounts.length===0){
+  var empty=document.createElement('p');
+  empty.className='muted';
+  empty.textContent='暂无账号记录。';
+  root.appendChild(empty);
+  return;
+ }
+ for(var i=0;i<accounts.length;i++){
+  var account=accounts[i];
+  var item=document.createElement('div');
+  item.className='cookie-entry';
+  item.setAttribute('role','listitem');
+  var name=document.createElement('strong');
+  name.textContent=account.account||('账号 '+(i+1));
+  var tag=document.createElement('span');
+  tag.className='cookie-tag '+(cookieLabels[account.status]?account.status:'unknown');
+  tag.textContent=cookieLabels[account.status]||'无法确认';
+  var checked=document.createElement('small');
+  checked.textContent=account.checkedAt?'最近验证：'+beijing(account.checkedAt):'无验证记录';
+  item.appendChild(name);
+  item.appendChild(tag);
+  item.appendChild(checked);
+  root.appendChild(item);
+ }
+}
 function render(state){
  display('date',state.date);
  display('completed',state.completed);
@@ -140,6 +182,7 @@ function render(state){
  display('busy',state.busy?'执行中':'等待调度');
  display('risk',state.riskStopped?'已停止今日全部签到':'未触发');
  display('pwlogins',state.passwordLogins);
+ renderCookies(state.cookieAccounts);
  display('limit',state.maxAttemptsPerAccount ? '每账号 '+state.maxAttemptsPerAccount+' 次（首次 + 重试）' : '—');
  byId('dashboard').hidden=false;
 }
