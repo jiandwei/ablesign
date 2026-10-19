@@ -14,6 +14,8 @@
 - **持久化**：随机目标、已签到账号、失败次数由 SQLite Durable Object 保存。Worker 重启、重复调度也不会重新抽签。
 - **保守重试**：每个账号每天最多 **3 次**（首次签到 + 最多 2 次重试），失败后在当日允许时间内随机安排补签。23:45 兜底也受同一次数上限约束；当天已签到或达到上限不再请求。
 - **风控立即停止**：遇到 HTTP 403、429、验证码、登录拒绝等安全限制信号，**当天所有账号停止自动签到和重试**（包括手动点击“立即签到”）；次日重新生成计划。风控检测是保守启发式，可能将登录异常当成限制以避免频繁尝试。
+- **Cookie 优先**：可配置 `ABLESCI_COOKIE`（单账号）或 `ABLESCI_COOKIES`（多账号 JSON 映射）作为 Worker Secrets。优先直接用 Cookie 请求签到接口，无需重复登录。
+- **密码登录每天最多一次**：仅当签到接口明确返回 Cookie 已失效时才回退密码登录；无 Cookie 时也只登录一次。密码登录配额在请求发出前写入 Durable Object，重启后不会重复登录。Cookie 已失效且密码配额耗尽时不再请求。
 - **多账号**：支持多行 `邮箱:密码`，也兼容原脚本的同一行逗号/分号分隔。
 - **通知**：支持 PushPlus、Server酱、息知。
 - **安全**：管理员 API 使用 Bearer Token；接口不输出明文账号、密码或站点 Cookie。
@@ -39,6 +41,34 @@ npm run deploy
 ```
 
 也可以复制 `.dev.vars.example` 为 `.dev.vars` 本地调试；此文件被 gitignore 排除。
+
+## Cookie 优先模式（可选）
+
+**请先在科研通注销此前贴到聊天或其他公开位置的旧会话，再获取新的 Cookie；切勿在 GitHub Issues、README、Cloudflare 明文变量、日志中公布真实 Cookie。** Cookie 属于账号登录凭据，直接复制浏览器请求中的 Cookie 可能很快失效。
+
+在 Cloudflare → Workers & Pages → `ablesign` → **Settings → Variables and Secrets → Add → Secret** 添加以下其中一种：
+
+- 单账号：名称 `ABLESCI_COOKIE`，值为该账号从自己浏览器获得的完整 **Cookie 请求头值**（只复制 `Cookie:` 后面的内容，不要复制其他 HTTP 头）。`ABLESCI_ACCOUNTS` 继续保留单账号邮箱与密码，用于明确失效时的唯一一次密码登录。
+- 多账号：名称 `ABLESCI_COOKIES`，值为 JSON 对象（邮箱 → Cookie 字符串），每个邮箱要与 `ABLESCI_ACCOUNTS` 的账号对应，例如：
+
+```json
+{
+  "first@example.com": "session=example1; another=value1",
+  "second@example.com": "session=example2; another=value2"
+}
+```
+
+上面是虚构数据，不可直接用于登录。不要同时对多账号配置单账号 `ABLESCI_COOKIE`。
+
+**访问流程：**
+
+1. 每天北京时间 07:30–21:29 随机抽签（原功能保留）。
+2. 有可用 Cookie 时，优先请求 `GET https://www.ablesci.com/user/sign`；成功或已签到就结束。
+3. 只有可明确识别的会话失效响应（如 HTTP 401、跳回登录页、返回“请先登录”等）才允许回退**一次**密码登录。
+4. 403、429、验证码、访问频繁或其他明显风控信号直接停止当天所有自动请求，不尝试用密码绕过。
+5. 每个账号每天最多 3 次签到尝试（包括首次加最多两次重试）；一天最多一次密码登录。前一次 Cookie 确认失效后，同日不再使用这份失效 Cookie。
+
+Cookie 是否有效依赖科研通的会话策略与出口网络。浏览器能访问不代表 Cloudflare Worker 一定可以使用相同会话。响应中的 `content-encoding`、`server` 等不是客户端需要填写的请求头；Workers 会自动处理压缩响应。
 
 ## 时间安排（北京时间）
 
@@ -78,7 +108,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER_URL/init"
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER_URL/run"
 ```
 
-- `/status`：当天随机目标、已完成数、下次补签时间，以及 `riskStopped` 风控停止标记。
+- `/status`：当天随机目标、已完成数、下次补签时间、已使用密码登录配额的账号数及 `riskStopped` 风控停止标记（不会返回 Cookie 值）。
 - `/init`：初始化当天计划（当天已有计划则不会重新随机）。
 - `/run`：**手动**立即处理尚未成功的账号（只有北京时间 07:30～23:59 才允许）。
 - `/health`：公开健康检查，不包含秘密信息。
@@ -89,7 +119,8 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER_URL/run"
 src/
   index.js       # Worker 入口 + Durable Object 调度
   utils.js       # 北京时间、安全随机时刻、账号解析
-  ablesci.js     # 登录、CSRF、Cookie、签到
+  ablesci.js     # Cookie 优先、登录、CSRF、签到
+  credentials.js # Secret 账号与 Cookie 映射
   notify.js      # PushPlus/Server酱/息知
 tests/           # Node.js 单元测试
 wrangler.jsonc   # Cron + SQLite Durable Object
