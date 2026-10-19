@@ -107,13 +107,21 @@ async function passwordLoginAndSign(email, password) {
 // BEFORE the first login GET request; a crash cannot grant another login.
 export async function signAccount(email, password, cookie = '', reservePasswordLogin = async () => false) {
   let cookieExpired = false;
+  let cookieStatus;
+  let cookieCheckedAt;
   if (cookie) {
     const result = await signWithJar(jarFromCookie(cookie));
-    if (!result.expired) return { ...result, mode: 'cookie', cookieExpired: false };
+    cookieCheckedAt = Date.now();
+    cookieStatus = result.expired ? 'expired' : result.ok ? 'valid' : result.blocked ? 'restricted' : 'unknown';
+    if (!result.expired) {
+      return { ...result, mode: 'cookie', cookieExpired: false, cookieStatus, cookieCheckedAt };
+    }
     cookieExpired = true;
   }
-  if (!password) return { ...failure('password_missing', true), cookieExpired };
-  if (!await reservePasswordLogin()) return { ...failure('password_login_limit_reached'), cookieExpired };
+  if (!password) return { ...failure('password_missing', true), cookieExpired, cookieStatus, cookieCheckedAt };
+  if (!await reservePasswordLogin()) {
+    return { ...failure('password_login_limit_reached'), cookieExpired, cookieStatus, cookieCheckedAt };
+  }
   const result = await passwordLoginAndSign(email, password);
-  return { ...result, mode: 'password', cookieExpired };
+  return { ...result, mode: 'password', cookieExpired, cookieStatus, cookieCheckedAt };
 }
