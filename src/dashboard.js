@@ -1,4 +1,4 @@
-export const DASHBOARD_HTML = String.raw\`<!doctype html>
+export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -200,4 +200,4 @@ byId('token').addEventListener('keydown',function(ev){
 })();
 </script>
 </body>
-</html>\`;
+</html>`;
