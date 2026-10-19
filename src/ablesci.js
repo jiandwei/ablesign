@@ -19,7 +19,6 @@ function getCookies(response) {
 }
 export function updateCookies(jar, response) {
   for (const item of getCookies(response)) {
-    // Each Set-Cookie line begins with exactly one cookie-pair.
     const first = item.split(';', 1)[0];
     const idx = first.indexOf('=');
     if (idx > 0) jar.set(first.slice(0, idx).trim(), first.slice(idx + 1));
@@ -31,50 +30,88 @@ export function cookieHeader(jar) {
 async function request(url, options, jar) {
   const headers = new Headers({ ...BROWSER_HEADERS, ...(options.headers || {}) });
   if (jar.size) headers.set('Cookie', cookieHeader(jar));
-  const resp = await fetch(url, { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(30000) });
-  updateCookies(jar, resp);
-  return resp;
+  const response = await fetch(url, {
+    ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(30000)
+  });
+  updateCookies(jar, response);
+  return response;
 }
-async function responseJson(resp) {
-  try { return await resp.json(); } catch { return null; }
+function jarFromCookie(raw = '') {
+  const jar = new Map();
+  for (const pair of raw.split(';')) {
+    const i = pair.indexOf('=');
+    if (i > 0) jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+  }
+  return jar;
 }
-export async function signAccount(email, password) {
+export function sessionExpiredResponse(status, location = '', message = '') {
+  if (status === 401) return true;
+  if ([301, 302, 303, 307, 308].includes(status) && /\/site\/login(?:[?#]|$)/i.test(location)) return true;
+  return /(?:登录已失效|请先登录|未登录|登录已过期|session expired|login required|unauthorized)/i.test(message);
+}
+async function signWithJar(jar) {
+  try {
+    const response = await request(SIGN, { method: 'GET', headers: { Referer: HOME } }, jar);
+    if (isRiskHttp(response.status)) return failure('sign_restricted', true);
+    if (sessionExpiredResponse(response.status, response.headers.get('location') || '')) {
+      return { ok: false, expired: true, detail: 'session_expired' };
+    }
+    if (!response.ok) return failure('sign_http_' + response.status);
+    const body = await response.text();
+    if (isRiskText(body)) return failure('sign_challenge', true);
+    let result;
+    try { result = JSON.parse(body); } catch { return failure('invalid_sign_response'); }
+    if (result?.code === 0) return { ok: true, detail: 'signed', blocked: false };
+    if (typeof result?.msg === 'string' && result.msg.includes('您今天已于')) {
+      return { ok: true, detail: 'already_signed', blocked: false };
+    }
+    if (sessionExpiredResponse(response.status, '', result?.msg || '')) {
+      return { ok: false, expired: true, detail: 'session_expired' };
+    }
+    return failure('sign_rejected', true);
+  } catch {
+    return failure('network_error');
+  }
+}
+async function passwordLoginAndSign(email, password) {
   const jar = new Map();
   try {
     const page = await request(LOGIN, { method: 'GET' }, jar);
     if (isRiskHttp(page.status)) return failure('login_page_restricted', true);
     if (!page.ok) return failure('login_page_http_' + page.status);
-    const loginHtml = await page.text();
-    if (isRiskText(loginHtml)) return failure('login_page_challenge', true);
-    const csrf = extractCsrf(loginHtml);
+    const html = await page.text();
+    if (isRiskText(html)) return failure('login_page_challenge', true);
+    const csrf = extractCsrf(html);
     if (!csrf) return failure('csrf_missing', true);
     const form = new URLSearchParams({ _csrf: csrf, email, password, remember: 'off' });
-    const login = await request(LOGIN, {
+    const response = await request(LOGIN, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Referer': LOGIN },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', Referer: LOGIN },
       body: form.toString()
     }, jar);
-    if (isRiskHttp(login.status)) return failure('login_restricted', true);
-    if (!login.ok) return failure('login_http_' + login.status);
-    const loginText = await login.text();
-    let json;
-    try { json = JSON.parse(loginText); } catch { json = null; }
-    if (isRiskText(loginText)) return failure('login_challenge', true);
-    const loggedIn = json ? json.code === 0 : loginText.includes('退出');
-    // Unidentified login rejection is treated as a permanent stop for this day:
-    // repeated password attempts can lock an account.
-    if (!loggedIn) return failure('login_rejected', true);
-    const signed = await request(SIGN, { method: 'GET', headers: { Referer: HOME } }, jar);
-    if (isRiskHttp(signed.status)) return failure('sign_restricted', true);
-    if (!signed.ok) return failure('sign_http_' + signed.status);
-    const result = await responseJson(signed);
-    if (!result) return failure('invalid_sign_response');
-    if (result.code === 0) return { ok: true, detail: 'signed', blocked: false };
-    if (typeof result.msg === 'string' && result.msg.includes('您今天已于')) return { ok: true, detail: 'already_signed', blocked: false };
-    if (isRiskText(result.msg)) return failure('sign_challenge', true);
-    return failure('sign_rejected', true);
+    if (isRiskHttp(response.status)) return failure('login_restricted', true);
+    if (!response.ok) return failure('login_http_' + response.status);
+    const text = await response.text();
+    if (isRiskText(text)) return failure('login_challenge', true);
+    let result;
+    try { result = JSON.parse(text); } catch { result = null; }
+    if (!(result ? result.code === 0 : text.includes('退出'))) return failure('login_rejected', true);
+    return await signWithJar(jar);
   } catch {
-    // Never propagate upstream response content or request data into logs.
     return failure('network_error');
   }
+}
+// Called once per daily sign attempt. reservePasswordLogin must persist allowance
+// BEFORE the first login GET request; a crash cannot grant another login.
+export async function signAccount(email, password, cookie = '', reservePasswordLogin = async () => false) {
+  if (cookie) {
+    const cookieResult = await signWithJar(jarFromCookie(cookie));
+    if (!cookieResult.expired) return { ...cookieResult, mode: 'cookie' };
+  }
+  if (!password) return failure('password_missing', true);
+  if (!await reservePasswordLogin()) {
+    return failure('password_login_limit_reached');
+  }
+  const result = await passwordLoginAndSign(email, password);
+  return { ...result, mode: 'password' };
 }
