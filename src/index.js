@@ -95,7 +95,7 @@ export class SignScheduler extends DurableObject {
       return reply({ ok: false, detail: 'internal_error' }, 500);
     }
   }
-  async ensureToday() {
+  async ensureToday(schedule = true) {
     const now = Date.now();
     const day = beijingDay(now);
     let state = await this.current();
@@ -105,7 +105,7 @@ export class SignScheduler extends DurableObject {
     }
     // If no alarm exists, restore it. A target in the past is scheduled immediately
     // within allowed hours; after 21:30 use 23:45 fallback instead.
-    if (await this.ctx.storage.getAlarm() === null) {
+    if (schedule && await this.ctx.storage.getAlarm() === null) {
       const fallback = atBeijing(day, 23, 45);
       const earliest = atBeijing(day, 7, 30);
       const latest = atBeijing(day, 21, 30);
@@ -158,7 +158,9 @@ export class SignScheduler extends DurableObject {
       await this.save(state);
       const success = Object.values(state.results).filter(x => x.ok).length;
       const failed = accounts.length - success;
-      if (failed > 0 && !final) {
+      if (failed === 0) {
+        await this.ctx.storage.deleteAlarm();
+      } else if (failed > 0 && !final) {
         const deadline = atBeijing(state.date, 23, 45);
         const when = Date.now() + (5 * 60 + randomInt(26 * 60)) * 1000;
         if (when < deadline) await this.ctx.storage.setAlarm(when);
@@ -178,7 +180,7 @@ export class SignScheduler extends DurableObject {
   }
   async alarm() {
     if (this.busy) return;
-    let state = await this.ensureToday();
+    let state = await this.ensureToday(false);
     const now = Date.now();
     if (now < state.target || !inSignWindow(now)) {
       if (now < state.target) await this.ctx.storage.setAlarm(state.target);
