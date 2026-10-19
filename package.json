@@ -7,7 +7,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "test": "node --test tests/*.test.js",
-    "check": "node --check src/index.js && node --check src/ablesci.js && node --check src/utils.js && node --check src/notify.js"
+    "check": "node --check src/index.js && node --check src/ablesci.js && node --check src/utils.js && node --check src/credentials.js && node --check src/notify.js && node --check src/policy.js && node --check src/dashboard.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
@@ -28,6 +28,12 @@
       },
       "XZKEY": {
         "description": "可选：息知消息推送密钥"
+      },
+      "ABLESCI_COOKIE": {
+        "description": "可选：单账号 Cookie（整行 Cookie 请求头值，作为 Secret 保存，不要提交代码）"
+      },
+      "ABLESCI_COOKIES": {
+        "description": "可选：多账号 Cookie JSON 对象，键为邮箱，值为 Cookie 请求头值（Secret）"
       }
     }
   }
