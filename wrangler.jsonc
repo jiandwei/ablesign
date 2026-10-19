@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ablesign",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-19",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SIGNER",
+        "class_name": "SignScheduler"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SignScheduler"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "20 23 * * *",
+      "0 12 * * *",
+      "45 15 * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
