@@ -104,14 +104,14 @@ async function passwordLoginAndSign(email, password) {
 // Called once per daily sign attempt. reservePasswordLogin must persist allowance
 // BEFORE the first login GET request; a crash cannot grant another login.
 export async function signAccount(email, password, cookie = '', reservePasswordLogin = async () => false) {
+  let cookieExpired = false;
   if (cookie) {
-    const cookieResult = await signWithJar(jarFromCookie(cookie));
-    if (!cookieResult.expired) return { ...cookieResult, mode: 'cookie' };
+    const result = await signWithJar(jarFromCookie(cookie));
+    if (!result.expired) return { ...result, mode: 'cookie', cookieExpired: false };
+    cookieExpired = true;
   }
-  if (!password) return failure('password_missing', true);
-  if (!await reservePasswordLogin()) {
-    return failure('password_login_limit_reached');
-  }
+  if (!password) return { ...failure('password_missing', true), cookieExpired };
+  if (!await reservePasswordLogin()) return { ...failure('password_login_limit_reached'), cookieExpired };
   const result = await passwordLoginAndSign(email, password);
-  return { ...result, mode: 'password' };
+  return { ...result, mode: 'password', cookieExpired };
 }
