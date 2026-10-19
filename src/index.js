@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { DASHBOARD_HTML } from './dashboard.js';
 import { beijingDay, atBeijing, inSignWindow, randomTarget, randomInt, parseAccounts, accountKey, nextDay } from './utils.js';
 import { signAccount } from './ablesci.js';
+import { configuredAccounts } from './credentials.js';
 import { notify } from './notify.js';
 import { canAttempt, MAX_ATTEMPTS } from './policy.js';
 
@@ -93,6 +94,7 @@ export class SignScheduler extends DurableObject {
         blocked: keys.filter(x => x.blocked).length,
         riskStopped: !!state?.riskStopped,
         maxAttemptsPerAccount: MAX_ATTEMPTS,
+        passwordLogins: keys.filter(x => x.passwordLoginUsed).length,
         nextWake: await this.ctx.storage.getAlarm(),
         lastRun: state?.lastRun || null,
         lastError: state?.lastError || null,
@@ -141,7 +143,7 @@ export class SignScheduler extends DurableObject {
   }
   async hasPending(state) {
     if (state.riskStopped) return false;
-    const accounts = parseAccounts(this.env.ABLESCI_ACCOUNTS);
+    const accounts = configuredAccounts(this.env);
     for (const account of accounts) {
       const key = await accountKey(account.email);
       if (canAttempt(state.results?.[key], state.riskStopped)) return true;
@@ -164,12 +166,33 @@ export class SignScheduler extends DurableObject {
         const key = await accountKey(account.email);
         const prior = state.results[key] || { ok: false, attempts: 0 };
         if (!canAttempt(prior, state.riskStopped)) continue;
-        const result = await signAccount(account.email, account.password);
+        // Reserve the daily sign attempt before making any external request.
+        // This ensures an interrupted run cannot get an extra attempt.
         state.results[key] = {
+          ...prior,
+          attempts: (prior.attempts || 0) + 1,
+          detail: 'attempt_started',
+          checked: Date.now()
+        };
+        await this.save(state);
+        const reservePasswordLogin = async () => {
+          if (state.results[key].passwordLoginUsed) return false;
+          state.results[key].passwordLoginUsed = true;
+          await this.save(state);
+          return true;
+        };
+        const result = await signAccount(
+          account.email, account.password,
+          prior.cookieExpired ? '' : account.cookie,
+          reservePasswordLogin
+        );
+        state.results[key] = {
+          ...state.results[key],
           ok: result.ok,
           detail: result.detail,
-          attempts: prior.attempts + 1,
           blocked: !!result.blocked,
+          cookieExpired: !!prior.cookieExpired || !!result.cookieExpired,
+          mode: result.mode || null,
           checked: Date.now()
         };
         attempted++;
